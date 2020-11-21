@@ -60,7 +60,7 @@ class Map(nn.Module):
     """Out convolution and logic sigmoid"""
     def __init__(self, in_channels, out_channels):
         super().__init__()
-        nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
 
     def forward(self, x):
         return torch.sigmoid(self.conv(x))

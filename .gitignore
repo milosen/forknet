@@ -6,3 +6,5 @@ data/
 
 # tensorboard data
 test/runs/
+
+*.egg-info/
