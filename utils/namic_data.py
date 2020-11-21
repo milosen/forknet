@@ -7,16 +7,7 @@ import torch
 from scipy import ndimage
 from torch.utils.data import Dataset
 import numpy as np
-
-
-class Sample:
-    def __init__(self, t1w: tuple, seg: tuple) -> None:
-        data_seg, header_seg = seg
-        data_t1w, header_t1w = t1w
-        self.dict = {
-            't1w': {'data': data_t1w, 'header': header_t1w},
-            'seg': {'data': data_seg, 'header': header_seg}
-        }
+from torch import randperm
 
 
 class NAMIC(Dataset):
@@ -121,3 +112,20 @@ class Affine:
         sample['t1w'].update({'data': t1w_transformed})
         sample['seg'].update({'data': seg_transformed})
         return sample
+
+
+def collate(batch):
+    t1w = batch['t1w']['data']
+    seg = batch['seg']['data']
+    batch_size = t1w.shape[0]
+    slices_per_volume = t1w.shape[1]
+    slice_shape = t1w.shape[2:]
+    slices_per_batch = batch_size * slices_per_volume
+    rand_idx = randperm(slices_per_batch)
+    t1w = t1w.permute((0, 3, 2, 1)).reshape((slices_per_batch, 1, slice_shape[0], slice_shape[1]))
+    seg = seg.permute((0, 3, 2, 1)).reshape((slices_per_batch, 1, slice_shape[0], slice_shape[1]))
+    t1w_transformed = t1w.view(t1w.shape)[rand_idx]
+    seg_transformed = seg.view(seg.shape)[rand_idx]
+    batch['t1w'].update({'data': t1w_transformed})
+    batch['seg'].update({'data': seg_transformed})
+    return batch
