@@ -2,7 +2,7 @@ import unittest
 
 from torchvision import transforms
 
-from utils.namic_data import NAMIC, Affine
+from utils.data import NAMIC, Affine
 from utils.visuals import overlay
 
 
