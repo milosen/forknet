@@ -1,11 +1,11 @@
 name: forknet_env
 channels:
   - defaults
+  - pytorch
 dependencies:
-  - python=3
+  - python>=3.7
   - pytorch
   - cudatoolkit=11.0
   - torchaudio
   - torchvision
   - tensorboard
-prefix: /data/pt_gr_weiskopf_machine-learning/nmilosevic/conda/envs/forknet_env
