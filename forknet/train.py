@@ -9,6 +9,7 @@ from torch.optim import Adam
 import torch
 import torchvision
 from tqdm import tqdm
+import click
 
 from forknet.model import ForkNet
 from utils.data import NAMIC, ToTensor
@@ -22,6 +23,12 @@ n_val = 1
 device = "cuda"
 
 
+@click.group()
+def cli():
+    pass
+
+
+@cli.command(help="Train the network")
 def train_net():
     transform = transforms.Compose([
         ToTensor(device=device)
@@ -29,7 +36,7 @@ def train_net():
     dataset = NAMIC(transform=transform)
     net = ForkNet(n_classes=2)
     net.to(device)
-    writer = SummaryWriter(os.path.join('runs', datetime.now().strftime("%Y-%m-%d_%H-%M")))
+    writer = SummaryWriter(os.path.join('../runs', datetime.now().strftime("%Y-%m-%d_%H-%M")))
     train, val = random_split(dataset, [n_train, n_val])
     val_loader = DataLoader(val, batch_size=1, shuffle=False, num_workers=0)
     train_loader = DataLoader(train, batch_size=batch_slices, shuffle=True, num_workers=0)
