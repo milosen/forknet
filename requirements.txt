@@ -1,5 +1,9 @@
+pytorch~=1.7.0
 torchvision~=0.8.1
 matplotlib~=3.3.2
 numpy~=1.19.2
 scipy~=1.5.2
 setuptools~=50.3.0
+forknet~=0.1
+click~=7.1.2
+tqdm~=4.52.0

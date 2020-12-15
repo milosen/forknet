@@ -62,5 +62,5 @@ class Map(nn.Module):
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
 
     def forward(self, x):
-        # TODO squeeze channel dimension
+        # TODO squeeze channel dimension?
         return self.conv(x)

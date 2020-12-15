@@ -27,13 +27,13 @@ class DecoderTrack(torch.nn.Module):
 class ForkNet(torch.nn.Module):
     def __init__(self, n_classes):
         super(ForkNet, self).__init__()
-        self.classes = n_classes
+        self.n_classes = n_classes
         self.encoders = torch.nn.ModuleList([
             EncodeModule(1 if i == 1 else 2 ** (i + 1), 2 ** (i + 2)) for i in range(1, 7)
         ])
         self.base_decoder = DecodeModule(256, 128)
         self.decoder_tracks = torch.nn.ModuleList([
-            DecoderTrack() for _ in range(self.classes)
+            DecoderTrack() for _ in range(self.n_classes)
         ])
         self.map = Map(1, 1)
 

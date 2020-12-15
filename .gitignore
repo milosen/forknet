@@ -136,4 +136,9 @@ case01015/
 test/runs/
 runs/
 
+# state dict
+interrupt.pth
+checkpoint.pth
+
+# misc
 *.swp
