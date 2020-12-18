@@ -53,9 +53,9 @@ class NAMIC(torch.utils.data.Dataset):
 
 class MICCAI18(torch.utils.data.Dataset):
     """MICCAI18 dataset."""
-    def __init__(self, base_dir) -> None:
+    def __init__(self, base_dir: str, case_list: list) -> None:
         self.base_dir = base_dir
-        self.cases = ['1', '4', '5', '7', '14', '070', '148']
+        self.cases = case_list
         self.case = 0
         self.n_slices = 48
         self.img_dims = (256, 256)

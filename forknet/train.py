@@ -2,6 +2,7 @@ from datetime import datetime
 import os
 import logging
 import sys
+from typing import Any
 
 import torch
 import torch.utils.data
@@ -14,7 +15,7 @@ from forknet.model import ForkNet
 from utils.data import MICCAI18
 
 
-def init_forknet(load: bool, n_classes: int,
+def init_forknet(load: Any, n_classes: int,
                  device: torch.device) -> torch.nn.Module:
     net = ForkNet(n_classes=n_classes)
     if load:
@@ -26,9 +27,9 @@ def init_forknet(load: bool, n_classes: int,
     return net
 
 
-def split_data(dataset, split, batch_size):
+def random_data_split(dataset, split, batch_size):
     train, val = torch.utils.data.random_split(dataset, split)
-    val_loader = torch.utils.data.DataLoader(val, batch_size=1, num_workers=0)
+    val_loader = torch.utils.data.DataLoader(val, batch_size=len(val), shuffle=False, num_workers=0)
     train_loader = torch.utils.data.DataLoader(train, batch_size=batch_size, shuffle=True, num_workers=0)
     return val_loader, train_loader
 
@@ -36,38 +37,60 @@ def split_data(dataset, split, batch_size):
 def validate_net(net,
                  val_loader,
                  criterion,
-                 writer,
                  tissues,
-                 global_step,
-                 write_graph,
                  device):
     with torch.no_grad():
-        sample_val = iter(val_loader).next()
-        for mod in sample_val:
-            sample_val[mod] = sample_val[mod].to(device)
-        inp_val = sample_val.pop('t1w')
-        out = tuple(torch.sigmoid(o) for o in net(inp_val))
+        validation_batch_dict = iter(val_loader).next()
+        for tensor in validation_batch_dict:
+            validation_batch_dict[tensor] = validation_batch_dict[tensor].to(device)
+        validation_input = validation_batch_dict.pop('t1w')
+        net_output = tuple(torch.sigmoid(o) for o in net(validation_input))
         losses = [
             criterion(
-                out[i_tissue].squeeze(dim=1),
-                sample_val[tissue].squeeze(dim=1).to(device)
+                net_output[i_tissue],
+                validation_batch_dict[tissue]
             ) for i_tissue, tissue in enumerate(tissues)
         ]
+        input_sample = validation_input[0]
+        sample_targets = tuple(validation_batch_dict[tissue][0] for tissue in tissues)
+        sample_outputs = tuple(o[0] for o in net_output)
         # write network graph, visualization and metrics to tensorboard
-        img_grid = [inp_val[0]/torch.max(inp_val[0])]
-        for i_tissue, tissue in enumerate(tissues):
-            img_grid.append(sample_val[tissue][0])
+        img_grid = [(input_sample - input_sample.min()) / torch.max(input_sample)]
+        for i_tissue, _ in enumerate(tissues):
+            img_grid.append(sample_targets[i_tissue])
         img_grid.append(torch.zeros((1, 256, 256), device=device))
         for i_tissue, tissue in enumerate(tissues):
-            img_grid.append(out[i_tissue][0])
-            writer.add_scalar(f'loss_{tissue}', losses[i_tissue], global_step=global_step)
-        writer.add_image(
-            img_tensor=torchvision.utils.make_grid(img_grid, nrow=len(tissues)+1),
-            tag=f'data {tissues}',
+            img_grid.append(sample_outputs[i_tissue])
+        return losses, img_grid
+
+
+def tensorboard_write(writer,
+                      global_step,
+                      tissues,
+                      losses,
+                      val_losses,
+                      img_grid,
+                      net,
+                      write_network_graph=False):
+    for i_tissue, tissue in enumerate(tissues):
+        writer.add_scalars(
+            f'loss/{tissue}', {
+                'train': losses[i_tissue],
+                'validation': val_losses[i_tissue],
+            },
             global_step=global_step
         )
-        if write_graph:
-            writer.add_graph(net, inp_val)
+    writer.add_image(
+        img_tensor=torchvision.utils.make_grid(img_grid, nrow=len(tissues) + 1),
+        tag=f'validation sample {tissues}',
+        global_step=global_step
+    )
+    if (global_step % 100) == 0:
+        gradients = [param.grad.view(-1) for param in net.parameters()]
+        gradients = torch.cat(gradients)
+        writer.add_histogram(f'Gradients', gradients, global_step=global_step)
+    if write_network_graph:
+        writer.add_graph(net, torch.zeros((1, 1, 256, 256)))
 
 
 @click.group()
@@ -77,7 +100,7 @@ def cli():
 
 @cli.command(help="Train the network")
 @click.option('-b', '--batch_size', default=20, help='number of slices in batch')
-@click.option('-epoch', '--epochs', default=20, help='number of training epochs')
+@click.option('--epochs', default=20, help='number of training epochs')
 @click.option('-l', '--lr', default=1e-3, help='learning rate')
 @click.option('--eps', default=1e-8, help='adam epsilon value')
 @click.option('--betas', default=(0.9, 0.999), help='adam beta values')
@@ -91,7 +114,7 @@ def cli():
 @click.option('--runs_dir', default='runs',
               help='path to tensorboard runs directory')
 @click.option('--load', default=None, type=str,
-              help='path to tensorboard runs directory')
+              help='path to state dict file')
 @click.option('--checkpoint', default=None, type=int,
               help='save network state dict every N epochs')
 def train_net(batch_size,
@@ -106,11 +129,16 @@ def train_net(batch_size,
               runs_dir,
               load,
               checkpoint):
-
+    # test_case = ['1']
+    train_cases = ['4', '5', '7', '14', '070', '148']
     device = torch.device('cuda' if torch.cuda.is_available() and force_cpu is False else 'cpu')
-    dataset = MICCAI18('data/miccai18/training')
+    dataset = MICCAI18(base_dir='data/miccai18/training', case_list=train_cases)
 
-    assert n_train + n_val == len(dataset)
+    try:
+        assert n_train + n_val == len(dataset)
+    except AssertionError:
+        logging.info(f"Dataset size: {len(dataset)}")
+        raise
 
     net = init_forknet(load=load, n_classes=2, device=device)
     criterion = torch.nn.BCEWithLogitsLoss()
@@ -120,9 +148,6 @@ def train_net(batch_size,
                                  eps=eps,
                                  weight_decay=l2_penalty,
                                  amsgrad=amsgrad)
-    val_loader, train_loader = split_data(
-        dataset=dataset, split=[n_train, n_val], batch_size=batch_size
-    )
 
     logging.info(f'Network:\n'
                  f'\t{net.n_classes} decoder tracks: {dataset.tissues}')
@@ -144,7 +169,14 @@ def train_net(batch_size,
         os.path.join(runs_dir, datetime.now().strftime("%Y-%m-%d_%H-%M"))
     )
 
+    val_loader, train_loader = random_data_split(
+        dataset=dataset,
+        split=[n_train, n_val],
+        batch_size=batch_size
+    )
+
     try:
+        global_step = 0
         for epoch in range(epochs):
             with tqdm(total=n_train, desc=f'Epoch {epoch + 1}/{epochs}', unit=' slices') as bar:
                 for batch_dict in train_loader:
@@ -154,16 +186,26 @@ def train_net(batch_size,
                     out = net(inp)
                     losses = [
                         criterion(
-                            out[i_tissue].squeeze(dim=1),
-                            batch_dict[tissue].squeeze(dim=1)
+                            out[i_tissue],
+                            batch_dict[tissue]
                         ) for i_tissue, tissue in enumerate(dataset.tissues)
                     ]
                     torch.autograd.backward(losses)
                     optimizer.step()
                     bar.update(inp.shape[0])
                     del inp, out
-                validate_net(net, val_loader, criterion, writer, tissues=dataset.tissues, global_step=epoch,
-                             write_graph=(epoch == epochs - 1), device=device)
+                    val_losses, img_grid = validate_net(
+                        net=net, val_loader=val_loader, criterion=criterion,
+                        device=device, tissues=dataset.tissues
+                    )
+                    tensorboard_write(
+                        writer=writer,
+                        global_step=global_step,
+                        tissues=dataset.tissues,
+                        losses=losses, val_losses=val_losses,
+                        img_grid=img_grid, net=net, write_network_graph=False
+                    )
+                    global_step += 1
             if checkpoint and (epoch % checkpoint) == (checkpoint - 1):
                 torch.save(net.state_dict(), 'checkpoint.pth')
                 logging.info(f'Saved checkpoint for epoch {epoch + 1}')
@@ -176,5 +218,13 @@ def train_net(batch_size,
         writer.close()
 
 
-if __name__ == '__main__':
-    train_net()
+@cli.command(help="Allocate network and print network information")
+@click.option('--load', default=None, type=str,
+              help='path to state dict file')
+@click.option('--n_classes', default=2, type=int,
+              help='path to state dict file')
+@click.option('--force_cpu', default=False,
+              help="always use cpu, even if cuda available")
+def dry_run(load, n_classes, force_cpu):
+    device = torch.device('cuda' if torch.cuda.is_available() and force_cpu is False else 'cpu')
+    print(init_forknet(load, n_classes, device))

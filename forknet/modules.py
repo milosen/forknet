@@ -48,13 +48,6 @@ class DecodeModule(nn.Module):
         return self.decode(x)
 
 
-class Concat(nn.Module):
-    """Tensor concatenation"""
-    def forward(self, x1, x2):
-        # input is DATAxCHANNELxHEIGHTxWIDTH
-        return torch.cat([x2, x1], dim=1)
-
-
 class Map(nn.Module):
     """Out convolution and logic sigmoid"""
     def __init__(self, in_channels, out_channels):
@@ -62,5 +55,4 @@ class Map(nn.Module):
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
 
     def forward(self, x):
-        # TODO squeeze channel dimension?
         return self.conv(x)

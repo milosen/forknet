@@ -35,10 +35,12 @@ class ForkNet(torch.nn.Module):
         self.decoder_tracks = torch.nn.ModuleList([
             DecoderTrack() for _ in range(self.n_classes)
         ])
-        self.map = Map(1, 1)
+        self.maps = torch.nn.ModuleList([
+            Map(in_channels=1, out_channels=1) for _ in range(self.n_classes)
+        ])
 
     def encoder_track(self, x: torch.Tensor) -> List[torch.Tensor]:
-        out = []
+        out = []  # TODO more efficient to concat the tensors?
         for encoder in self.encoders:
             x = encoder(x)
             out.append(x)
@@ -46,4 +48,7 @@ class ForkNet(torch.nn.Module):
         return out
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, ...]:
-        return tuple(self.map(decoder_track(self.encoder_track(x))) for decoder_track in self.decoder_tracks)
+        return tuple(
+            map_module(decoder_track(self.encoder_track(x)))
+            for decoder_track, map_module in zip(self.decoder_tracks, self.maps)
+        )
