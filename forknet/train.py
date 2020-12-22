@@ -13,6 +13,7 @@ import click
 
 from forknet.model import ForkNet
 from utils.data import MICCAI18
+from utils.visuals import plot_matrix
 
 
 def init_forknet(load: Any, n_classes: int,
@@ -38,7 +39,8 @@ def validate_net(net,
                  val_loader,
                  criterion,
                  tissues,
-                 device):
+                 device,
+                 xslice=0):
     with torch.no_grad():
         validation_batch_dict = iter(val_loader).next()
         for tensor in validation_batch_dict:
@@ -51,9 +53,9 @@ def validate_net(net,
                 validation_batch_dict[tissue]
             ) for i_tissue, tissue in enumerate(tissues)
         ]
-        input_sample = validation_input[0]
-        sample_targets = tuple(validation_batch_dict[tissue][0] for tissue in tissues)
-        sample_outputs = tuple(o[0] for o in net_output)
+        input_sample = validation_input[xslice]
+        sample_targets = tuple(validation_batch_dict[tissue][xslice] for tissue in tissues)
+        sample_outputs = tuple(o[xslice] for o in net_output)
         # write network graph, visualization and metrics to tensorboard
         img_grid = [(input_sample - input_sample.min()) / torch.max(input_sample)]
         for i_tissue, _ in enumerate(tissues):
@@ -71,6 +73,7 @@ def tensorboard_write(writer,
                       val_losses,
                       img_grid,
                       net,
+                      device,
                       write_network_graph=False):
     for i_tissue, tissue in enumerate(tissues):
         writer.add_scalars(
@@ -86,11 +89,10 @@ def tensorboard_write(writer,
         global_step=global_step
     )
     if (global_step % 100) == 0:
-        gradients = [param.grad.view(-1) for param in net.parameters()]
-        gradients = torch.cat(gradients)
+        gradients = torch.cat([param.grad.view(-1) for param in net.parameters()])
         writer.add_histogram(f'Gradients', gradients, global_step=global_step)
-    if write_network_graph:
-        writer.add_graph(net, torch.zeros((1, 1, 256, 256)))
+    if write_network_graph and global_step == 0:
+        writer.add_graph(net, torch.zeros((1, 1, 256, 256), device=device))
 
 
 @click.group()
@@ -190,10 +192,10 @@ def train_net(batch_size,
                             batch_dict[tissue]
                         ) for i_tissue, tissue in enumerate(dataset.tissues)
                     ]
+                    optimizer.zero_grad()
                     torch.autograd.backward(losses)
                     optimizer.step()
                     bar.update(inp.shape[0])
-                    del inp, out
                     val_losses, img_grid = validate_net(
                         net=net, val_loader=val_loader, criterion=criterion,
                         device=device, tissues=dataset.tissues
@@ -203,7 +205,8 @@ def train_net(batch_size,
                         global_step=global_step,
                         tissues=dataset.tissues,
                         losses=losses, val_losses=val_losses,
-                        img_grid=img_grid, net=net, write_network_graph=False
+                        img_grid=img_grid, net=net,
+                        device=device, write_network_graph=True
                     )
                     global_step += 1
             if checkpoint and (epoch % checkpoint) == (checkpoint - 1):
@@ -228,3 +231,22 @@ def train_net(batch_size,
 def dry_run(load, n_classes, force_cpu):
     device = torch.device('cuda' if torch.cuda.is_available() and force_cpu is False else 'cpu')
     print(init_forknet(load, n_classes, device))
+
+
+@cli.command(help="Test a trained network on the test data.")
+@click.argument('load', type=str)
+@click.option('--n_classes', default=2, type=int,
+              help='path to state dict file')
+@click.option('--force_cpu', default=False,
+              help="always use cpu, even if cuda available")
+@click.option('--xslice', default=30, help="choose axial slice")
+def test_net(load, n_classes, force_cpu, xslice):
+    test_case = ['1']
+    device = torch.device('cuda' if torch.cuda.is_available() and force_cpu is False else 'cpu')
+    dataset = MICCAI18(base_dir='data/miccai18/training', case_list=test_case)
+    net = init_forknet(load=load, n_classes=2, device=device)
+    criterion = torch.nn.BCEWithLogitsLoss()
+    test_loader = torch.utils.data.DataLoader(dataset, batch_size=len(dataset), shuffle=False, num_workers=0)
+    _, img_grid = validate_net(net=net, val_loader=test_loader, criterion=criterion,
+                               tissues=dataset.tissues, device=device, xslice=xslice)
+    plot_matrix(torchvision.utils.make_grid(img_grid, nrow=len(dataset.tissues) + 1).cpu().numpy()[0])
