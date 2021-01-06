@@ -142,3 +142,8 @@ checkpoint.pth
 
 # misc
 *.swp
+
+# mpcdf
+forknet_gpu_job.err.*
+forknet_gpu_job.out.*
+train_forknet.out

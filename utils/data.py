@@ -89,7 +89,7 @@ class MICCAI18(torch.utils.data.Dataset):
         self.std = np.std(self.data['t1w'])
         self.transform = Compose([
             ToTensor(torch.device('cpu')),
-            Norm(self.mean, self.std)]
+            Norm([self.mean], [self.std])]
         )
 
     def __len__(self):
