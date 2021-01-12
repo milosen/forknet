@@ -1,4 +1,4 @@
-name: forknet_env
+name: forknet
 channels:
   - defaults
   - conda-forge
@@ -6,11 +6,11 @@ channels:
 dependencies:
   - python>=3.7
   - pytorch
-  - cudatoolkit=11.0
-  - torchaudio
+  - cudatoolkit=11.1
   - torchvision
   - tensorboard
   - tqdm
   - scipy
   - nibabel
   - matplotlib
+  - ray-all
