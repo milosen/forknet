@@ -5,12 +5,12 @@ channels:
   - pytorch
 dependencies:
   - python>=3.7
-  - pytorch
+  - pytorch=1.5.0
   - cudatoolkit=11.1
-  - torchvision
-  - tensorboard
-  - tqdm
-  - scipy
-  - nibabel
-  - matplotlib
-  - ray-all
+  - torchvision=0.2.1
+  - tensorboard=2.3.0
+  - tqdm=4.55.1
+  - scipy=1.5.2
+  - nibabel=3.2.1
+  - matplotlib=3.3.2
+  - ray-all=1.0.1
