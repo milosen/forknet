@@ -9,7 +9,6 @@ import torch.utils.tensorboard
 import torchvision
 from tqdm import tqdm
 import click
-import numpy as np
 import os
 import ray.tune
 from ray.tune import CLIReporter
@@ -38,27 +37,32 @@ def validate_net(net,
                  device,
                  xslice=20):
     with torch.no_grad():
+        # TODO: export img grid code
         validation_batch_dict = iter(val_loader).next()
         for tensor in validation_batch_dict:
             validation_batch_dict[tensor] = validation_batch_dict[tensor].to(device)
-        validation_input = validation_batch_dict.pop('t1w')
-        net_output = tuple(torch.sigmoid(o) for o in net(validation_input))
+        validation_input_tensor = validation_batch_dict.pop('t1w')
+        forknet_output_tensors = tuple(torch.sigmoid(o) for o in net(validation_input_tensor))
         losses = [
             criterion(
-                net_output[i_tissue],
+                forknet_output_tensors[i_tissue],
                 validation_batch_dict[tissue]
             ) for i_tissue, tissue in enumerate(tissues)
         ]
-        input_sample = validation_input[xslice]
-        sample_targets = tuple(validation_batch_dict[tissue][xslice] for tissue in tissues)
-        sample_outputs = tuple(o[xslice] for o in net_output)
-        # write network graph, visualization and metrics to tensorboard
-        img_grid = [(input_sample - input_sample.min()) / torch.max(input_sample)]
+
+        # select slice xslice from validation set for visualization
+        input_slice = validation_input_tensor[xslice]
+        slice_target_masks = tuple(validation_batch_dict[tissue][xslice] for tissue in tissues)
+        slice_forknet_outputs = tuple(o[xslice] for o in forknet_output_tensors)
+
+        # build img grid for visualization
+        img_grid = [(input_slice - input_slice.min()) / torch.max(input_slice)]
         for i_tissue, _ in enumerate(tissues):
-            img_grid.append(sample_targets[i_tissue])
+            img_grid.append(slice_target_masks[i_tissue])
         img_grid.append(torch.zeros((1, 256, 256), device=device))
         for i_tissue, tissue in enumerate(tissues):
-            img_grid.append(sample_outputs[i_tissue])
+            img_grid.append(slice_forknet_outputs[i_tissue])
+
         return losses, img_grid
 
 
@@ -74,8 +78,8 @@ def tensorboard_write(writer,
     for i_tissue, tissue in enumerate(tissues):
         writer.add_scalars(
             f'loss/{tissue}', {
-                'train': losses[i_tissue],
-                'validation': val_losses[i_tissue],
+                'train': losses[i_tissue].item(),
+                'validation': val_losses[i_tissue].item(),
             },
             global_step=global_step
         )
@@ -109,13 +113,16 @@ def train_net(batch_size,
     train_dataset = MICCAI18(base_dir=data_dir, case_list=train_cases)
     val_dataset = MICCAI18(base_dir=data_dir, case_list=validation_cases)
 
+    # the validation set consists of just one batch
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=len(val_dataset),
                                              shuffle=False, num_workers=0)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size,
                                                shuffle=True, num_workers=0)
 
     net = ForkNet(n_classes=2)
-    optimizer = torch.optim.Adam(net.parameters(), lr=lr, betas=betas, eps=eps, weight_decay=l2_penalty, amsgrad=amsgrad)
+    optimizer = torch.optim.Adam(
+        net.parameters(), lr=lr, betas=betas, eps=eps, weight_decay=l2_penalty, amsgrad=amsgrad
+    )
     writer = torch.utils.tensorboard.SummaryWriter()
     if load:
         state = torch.load(load, map_location=device)
@@ -129,6 +136,7 @@ def train_net(batch_size,
             logging.info(f'Loaded model from {load}')
     if device == 'cuda' and torch.cuda.device_count() > 1:
         net = torch.nn.DataParallel(net)
+        logging.info(f"Using DataParallel")
     net.to(device)
 
     criterion = torch.nn.BCEWithLogitsLoss()
@@ -150,8 +158,11 @@ def train_net(batch_size,
     try:
         global_step = 0
         for epoch in range(epochs):
-            epoch_bar = tqdm(total=len(train_dataset), desc=f'Epoch {epoch + 1}/{epochs}', unit=' slices')
-            with contextlib.nullcontext if use_raytune else epoch_bar as bar:
+            if use_raytune:
+                maybe_bar = contextlib.nullcontext()
+            else:
+                maybe_bar = tqdm(total=len(train_dataset), desc=f'Epoch {epoch + 1}/{epochs}', unit=' slices')
+            with maybe_bar as bar:
                 for batch_dict in train_loader:
                     for mod in batch_dict:
                         batch_dict[mod] = batch_dict[mod].to(device)
@@ -166,7 +177,7 @@ def train_net(batch_size,
                     optimizer.zero_grad()
                     torch.autograd.backward(losses)
                     optimizer.step()
-                    bar.update(inp.shape[0]) if use_raytune else None
+                    bar.update(inp.shape[0]) if not use_raytune else None
                     val_losses, img_grid = validate_net(
                         net=net, val_loader=val_loader, criterion=criterion,
                         device=device, tissues=train_dataset.tissues
@@ -209,19 +220,20 @@ def cli():
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 
-@cli.command(help="Tune the hyperparameters")
-@click.option('--max_epochs', default=1, help='number of max training epochs')
+@cli.command(help="Tune the hyperparameters", context_settings={'show_default': True})
+@click.option('--max_epochs', default=200, help='number of max training epochs')
 @click.option('--num_samples', default=2, help='number of samples from the hyper-parameter distribution')
 @click.option('--gpus_per_trial', default=1, help='number of gpus per trial')
-@click.option('--cpus_per_trial', default=1, help='number of gpus per trial')
-def tune(max_epochs, num_samples, gpus_per_trial, cpus_per_trial):
+@click.option('--cpus_per_trial', default=1, help='number of cpus per trial')
+@click.option('--distributed', default=False, help='running ray tune in distributed mode')
+def tune(max_epochs, num_samples, gpus_per_trial, cpus_per_trial, distributed):
     data_dir = os.path.abspath("./data/miccai18/training/")
     config = {
         "lr": ray.tune.loguniform(1e-4, 1e-1),
-        "beta1": ray.tune.loguniform(1e-4, 1e-1),
-        "beta2": ray.tune.loguniform(1e-4, 1e-1),
-        "eps": ray.tune.loguniform(1e-4, 1e-1),
-        "l2_penalty": ray.tune.loguniform(1e-4, 1e-1),
+        "beta1": ray.tune.choice([0.9]),
+        "beta2": ray.tune.choice([0.999]),
+        "eps": ray.tune.choice([1e-8]),
+        "l2_penalty": ray.tune.loguniform(1e-4, 1),
         "batch_size": ray.tune.choice([20, 30, 60]),
         "amsgrad": ray.tune.choice([True, False]),
         "epochs": ray.tune.choice([max_epochs])
@@ -237,6 +249,8 @@ def tune(max_epochs, num_samples, gpus_per_trial, cpus_per_trial):
         # parameter_columns=["l1", "l2", "lr", "batch_size"],
         metric_columns=["loss", "training_iteration"]
     )
+    if distributed:
+        ray.init(address='auto')
     result = ray.tune.run(
         partial(tune_net, data_dir=data_dir),
         resources_per_trial={"cpu": cpus_per_trial, "gpu": gpus_per_trial},
