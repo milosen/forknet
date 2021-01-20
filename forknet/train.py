@@ -13,10 +13,16 @@ import os
 import ray.tune
 from ray.tune import CLIReporter
 from ray.tune.schedulers import ASHAScheduler
+import numpy as np
 
 from forknet.model import ForkNet
 from utils.data import MICCAI18
 from utils.visuals import plot_matrix
+
+
+torch.backends.cudnn.benchmark = False
+torch.manual_seed(10)
+np.random.seed(10)
 
 
 def init_forknet(load, n_classes, device):

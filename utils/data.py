@@ -41,11 +41,9 @@ class MICCAI18(torch.utils.data.Dataset):
         for tissue in self.tissues:
             label = self.labels[tissue]
             self.data[tissue][seg == label] = 1
-        self.mean = np.mean(self.data['t1w'])
-        self.std = np.std(self.data['t1w'])
         self.transform = Compose([
             ToTensor()
-            # , Norm()
+            , Norm([np.mean(self.data['t1w'])], [np.std(self.data['t1w'])])
         ])
 
     def __len__(self):
