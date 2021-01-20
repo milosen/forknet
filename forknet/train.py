@@ -231,7 +231,7 @@ def cli():
 @click.option('--num_samples', default=2, help='number of samples from the hyper-parameter distribution')
 @click.option('--gpus_per_trial', default=1, help='number of gpus per trial')
 @click.option('--cpus_per_trial', default=1, help='number of cpus per trial')
-@click.option('--distributed', default=False, help='running ray tune in distributed mode')
+@click.option('--distribute/--no-distribute', default=False, help='running ray tune in distributed mode')
 def tune(max_epochs, num_samples, gpus_per_trial, cpus_per_trial, distributed):
     data_dir = os.path.abspath("./data/miccai18/training/")
     config = {

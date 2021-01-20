@@ -1,10 +1,10 @@
 #!/bin/bash -l
 # Standard output and error:
-#SBATCH -o /u/nmilosevic/forknet/forknet_gpu_job.out.%j
-#SBATCH -e /u/nmilosevic/forknet/forknet_gpu_job.err.%j
+#SBATCH -o ./forknet_gpu_job.out.%j
+#SBATCH -e ./forknet_gpu_job.err.%j
 #
 # Initial working directory:
-#SBATCH -D /u/nmilosevic/forknet
+#SBATCH -D .
 #
 #SBATCH -J forknet
 #
@@ -13,7 +13,7 @@
 #SBATCH --gres=gpu:v100:2         # If using both GPUs of a node
 #SBATCH --mem=92500
 #
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=20
 #
@@ -54,7 +54,8 @@ done
 module purge
 module load miniconda cuda
 
-source activate forknet_env 
+source activate forknet
 
 # Run the program:
-srun scripts/htune-net.sh &> htune_forknet.out
+srun forknet tune --gpus_per_trial=2 --cpus_per_trial=1 --max_epochs=100 \
+		  --num_samples=3 --distributed &> rtune_forknet.out

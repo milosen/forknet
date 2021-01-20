@@ -1,10 +1,10 @@
 #!/bin/bash -l
 # Standard output and error:
-#SBATCH -o /u/nmilosevic/forknet/forknet_gpu_job.out.%j
-#SBATCH -e /u/nmilosevic/forknet/forknet_gpu_job.err.%j
+#SBATCH -o ./forknet_gpu_job.out.%j
+#SBATCH -e ./forknet_gpu_job.err.%j
 #
 # Initial working directory:
-#SBATCH -D /u/nmilosevic/forknet
+#SBATCH -D .
 #
 #SBATCH -J forknet
 #
@@ -15,7 +15,7 @@
 #
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=20
+#SBATCH --cpus-per-task=1
 #
 #SBATCH --mail-type=all
 #SBATCH --mail-user=%u@cbs.mpg.de
@@ -24,7 +24,7 @@
 module purge
 module load miniconda cuda
 
-source activate forknet_env 
+source activate forknet
 
 # Run the program:
-srun scripts/train-net.sh &> train_forknet.out
+srun forknet train &> train_forknet.out
