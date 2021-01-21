@@ -232,7 +232,7 @@ def cli():
 @click.option('--gpus_per_trial', default=1, help='number of gpus per trial')
 @click.option('--cpus_per_trial', default=1, help='number of cpus per trial')
 @click.option('--distribute/--no-distribute', default=False, help='running ray tune in distributed mode')
-def tune(max_epochs, num_samples, gpus_per_trial, cpus_per_trial, distributed):
+def tune(max_epochs, num_samples, gpus_per_trial, cpus_per_trial, distribute):
     data_dir = os.path.abspath("./data/miccai18/training/")
     config = {
         "lr": ray.tune.loguniform(1e-4, 1e-1),
@@ -255,7 +255,7 @@ def tune(max_epochs, num_samples, gpus_per_trial, cpus_per_trial, distributed):
         # parameter_columns=["l1", "l2", "lr", "batch_size"],
         metric_columns=["loss", "training_iteration"]
     )
-    if distributed:
+    if distribute:
         ray.init(address='auto')
     result = ray.tune.run(
         partial(tune_net, data_dir=data_dir),
@@ -263,7 +263,8 @@ def tune(max_epochs, num_samples, gpus_per_trial, cpus_per_trial, distributed):
         config=config,
         num_samples=num_samples,
         scheduler=scheduler,
-        progress_reporter=reporter
+        progress_reporter=reporter,
+        local_dir="./ray_results"
     )
 
     best_trial = result.get_best_trial("loss", "min", "last")
