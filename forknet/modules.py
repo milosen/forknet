@@ -2,6 +2,20 @@
 
 import torch
 import torch.nn as nn
+import kornia.augmentation as k
+
+
+class Augment(nn.Module):
+    def __init__(self, max_degrees) -> None:
+        super(Augment, self).__init__()
+        self.max_degrees = max_degrees
+        self.aff = k.RandomAffine(max_degrees)
+
+    def forward(self, masks: dict):
+        aff_params = self.aff.generate_parameters(masks['t1w'].shape)
+        for tissue_mask in masks:
+            masks[tissue_mask] = self.aff(masks[tissue_mask], aff_params)
+        return masks
 
 
 class ConvModule(nn.Module):

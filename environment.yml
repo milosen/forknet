@@ -14,3 +14,4 @@ dependencies:
   - nibabel=3.2.1
   - matplotlib=3.3.2
   - ray-all=1.0.1
+  - kornia=0.3.0

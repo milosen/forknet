@@ -16,6 +16,7 @@ from ray.tune.schedulers import ASHAScheduler
 import numpy as np
 
 from forknet.model import ForkNet
+from forknet.modules import Augment
 from utils.data import MICCAI18
 from utils.visuals import plot_matrix
 
@@ -43,15 +44,28 @@ def validate_net(net,
                  device,
                  xslice=20):
     with torch.no_grad():
+        threshold = torch.nn.Threshold(0.9, 0)
         # TODO: export img grid code
         validation_batch_dict = iter(val_loader).next()
+        augment = Augment(max_degrees=1)
+        validation_batch_dict = augment(validation_batch_dict)
         for tensor in validation_batch_dict:
             validation_batch_dict[tensor] = validation_batch_dict[tensor].to(device)
         validation_input_tensor = validation_batch_dict.pop('t1w')
         forknet_output_tensors = tuple(torch.sigmoid(o) for o in net(validation_input_tensor))
+        forknet_threshold_output_tensors = tuple(
+            (out >= 0.5).float()
+            for out in forknet_output_tensors
+        )
         losses = [
             criterion(
                 forknet_output_tensors[i_tissue],
+                validation_batch_dict[tissue]
+            ) for i_tissue, tissue in enumerate(tissues)
+        ]
+        losses_threshold = [
+            criterion(
+                forknet_threshold_output_tensors[i_tissue],
                 validation_batch_dict[tissue]
             ) for i_tissue, tissue in enumerate(tissues)
         ]
@@ -60,6 +74,7 @@ def validate_net(net,
         input_slice = validation_input_tensor[xslice]
         slice_target_masks = tuple(validation_batch_dict[tissue][xslice] for tissue in tissues)
         slice_forknet_outputs = tuple(o[xslice] for o in forknet_output_tensors)
+        slice_threshold_forknet_outputs = tuple(o[xslice] for o in forknet_threshold_output_tensors)
 
         # build img grid for visualization
         img_grid = [(input_slice - input_slice.min()) / torch.max(input_slice)]
@@ -68,8 +83,10 @@ def validate_net(net,
         img_grid.append(torch.zeros((1, 256, 256), device=device))
         for i_tissue, tissue in enumerate(tissues):
             img_grid.append(slice_forknet_outputs[i_tissue])
-
-        return losses, img_grid
+        img_grid.append(torch.zeros((1, 256, 256), device=device))
+        for i_tissue, tissue in enumerate(tissues):
+            img_grid.append(slice_threshold_forknet_outputs[i_tissue])
+        return losses, img_grid, losses_threshold
 
 
 def tensorboard_write(writer,
@@ -77,6 +94,7 @@ def tensorboard_write(writer,
                       tissues,
                       losses,
                       val_losses,
+                      val_threshold_losses,
                       img_grid,
                       net,
                       device,
@@ -86,6 +104,7 @@ def tensorboard_write(writer,
             f'loss/{tissue}', {
                 'train': losses[i_tissue].item(),
                 'validation': val_losses[i_tissue].item(),
+                'validationThreshold': val_threshold_losses[i_tissue].item()
             },
             global_step=global_step
         )
@@ -147,6 +166,8 @@ def train_net(batch_size,
 
     criterion = torch.nn.BCEWithLogitsLoss()
 
+    augment = Augment(max_degrees=1)
+
     if not use_raytune:
         logging.info(f'Network:\n'
                      f'\t{net.n_classes} decoder tracks: {train_dataset.tissues}')
@@ -172,6 +193,7 @@ def train_net(batch_size,
                 for batch_dict in train_loader:
                     for mod in batch_dict:
                         batch_dict[mod] = batch_dict[mod].to(device)
+                    batch_dict = augment(batch_dict)
                     inp = batch_dict.pop('t1w')
                     out = net(inp)
                     losses = [
@@ -184,7 +206,7 @@ def train_net(batch_size,
                     torch.autograd.backward(losses)
                     optimizer.step()
                     bar.update(inp.shape[0]) if not use_raytune else None
-                    val_losses, img_grid = validate_net(
+                    val_losses, img_grid, val_threshold_losses = validate_net(
                         net=net, val_loader=val_loader, criterion=criterion,
                         device=device, tissues=train_dataset.tissues
                     )
@@ -194,8 +216,9 @@ def train_net(batch_size,
                             global_step=global_step,
                             tissues=train_dataset.tissues,
                             losses=losses, val_losses=val_losses,
+                            val_threshold_losses=val_threshold_losses,
                             img_grid=img_grid, net=net,
-                            device=device, write_network_graph=True
+                            device=device, write_network_graph=True,
                         )
                     global_step += 1
             if use_raytune:
@@ -335,6 +358,6 @@ def test_net(load, n_classes, force_cpu, xslice):
     net = init_forknet(load=load, n_classes=n_classes, device=device)
     criterion = torch.nn.BCEWithLogitsLoss()
     test_loader = torch.utils.data.DataLoader(dataset, batch_size=len(dataset), shuffle=False, num_workers=0)
-    _, img_grid = validate_net(net=net, val_loader=test_loader, criterion=criterion,
+    _, img_grid, _ = validate_net(net=net, val_loader=test_loader, criterion=criterion,
                                tissues=dataset.tissues, device=device, xslice=xslice)
     plot_matrix(torchvision.utils.make_grid(img_grid, nrow=len(dataset.tissues) + 1).cpu().numpy()[0])

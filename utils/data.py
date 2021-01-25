@@ -5,13 +5,15 @@ import torch.utils.data
 import numpy as np
 import nibabel as nib
 from torchvision.transforms import Normalize, Compose
+import kornia.augmentation as k
 
 
 class MICCAI18(torch.utils.data.Dataset):
     """MICCAI18 dataset."""
-    def __init__(self, base_dir: str, case_list: list) -> None:
+    def __init__(self, base_dir: str, case_list: list, train: bool = True) -> None:
         self.base_dir = base_dir
         self.cases = case_list
+        self.train = train
         self.case = 0
         self.n_slices = 48
         self.img_dims = (256, 256)
@@ -41,10 +43,11 @@ class MICCAI18(torch.utils.data.Dataset):
         for tissue in self.tissues:
             label = self.labels[tissue]
             self.data[tissue][seg == label] = 1
-        self.transform = Compose([
+        self.init_transform = Compose([
             ToTensor()
             , Norm([np.mean(self.data['t1w'])], [np.std(self.data['t1w'])])
         ])
+        self.data = self.init_transform(self.data)
 
     def __len__(self):
         return len(self.cases)*self.n_slices
@@ -61,8 +64,6 @@ class MICCAI18(torch.utils.data.Dataset):
                     (1, self.img_dims[0], self.img_dims[1])
                 ) for mod in self.data
         }
-
-        sample = self.transform(sample)
 
         return sample
 
