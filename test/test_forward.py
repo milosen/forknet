@@ -5,8 +5,8 @@ from torchvision import transforms
 from torch.utils.data import DataLoader
 
 from forknet.model import ForkNet
-from utils.data import Affine, NAMIC, ToTensor, collate
-from utils.visuals import plot_matrix
+from forknet.utils.data import Affine, NAMIC, ToTensor, collate
+from forknet.utils.helper import plot_matrix
 
 
 batch_size = 2

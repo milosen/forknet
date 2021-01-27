@@ -18,7 +18,7 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'forknet = forknet.train:cli'
+            'forknet = cli:cli'
         ]
     }
 )

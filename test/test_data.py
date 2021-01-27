@@ -2,8 +2,8 @@ import unittest
 
 from torchvision import transforms
 
-from utils.data import NAMIC, Affine
-from utils.visuals import overlay
+from forknet.utils.data import NAMIC, Affine
+from forknet.utils.helper import overlay
 
 
 class TestData(unittest.TestCase):

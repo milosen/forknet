@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import List, Dict
 
 import torch
 from forknet.modules import EncodeModule, DecodeModule, ConvModule, Map
@@ -26,9 +26,10 @@ class DecoderTrack(torch.nn.Module):
 
 
 class ForkNet(torch.nn.Module):
-    def __init__(self, n_classes):
+    def __init__(self, tissues: list):
         super(ForkNet, self).__init__()
-        self.n_classes = n_classes
+        self.tissues = tissues
+        self.n_classes = len(tissues)
         self.encoders = torch.nn.ModuleList([
             EncodeModule(1 if i == 1 else 2 ** (i + 1), 2 ** (i + 2)) for i in range(1, 7)
         ])
@@ -45,8 +46,9 @@ class ForkNet(torch.nn.Module):
         out.append(self.base_decoder(out.pop()))
         return out
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, ...]:
+    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         encoder_outputs = self.encoder_track(x)
-        return tuple(
-            decoder_track(list(encoder_outputs)) for decoder_track in self.decoder_tracks
-        )
+        return {
+            tissue: decoder_track(list(encoder_outputs))
+            for tissue, decoder_track in zip(self.tissues, self.decoder_tracks)
+        }

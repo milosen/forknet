@@ -2,9 +2,9 @@ import matplotlib.pyplot as plt
 from numpy import ndarray
 
 
-def plot_matrix(mat: ndarray, title: str = '') -> None:
+def plot_matrix(mat: ndarray, title: str = '', cmap: str = 'gray') -> None:
     """Plot a 2D numpy array like an image."""
-    cax = plt.matshow(mat)
+    cax = plt.matshow(mat, cmap=cmap)
     plt.colorbar(cax)
     plt.title(title)
     plt.show()

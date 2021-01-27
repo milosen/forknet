@@ -1,33 +1,29 @@
 import logging
 import sys
-from functools import partial
 import contextlib
+import os
 
 import torch
 import torch.utils.data
 import torch.utils.tensorboard
 import torchvision
 from tqdm import tqdm
-import click
-import os
 import ray.tune
-from ray.tune import CLIReporter
-from ray.tune.schedulers import ASHAScheduler
 import numpy as np
 
 from forknet.model import ForkNet
-from forknet.modules import Augment
-from utils.data import MICCAI18
-from utils.visuals import plot_matrix
+from forknet.utils.transform import Transform
+from forknet.datasets.miccai18 import MICCAI18
 
 
 torch.backends.cudnn.benchmark = False
 torch.manual_seed(10)
 np.random.seed(10)
+writer = torch.utils.tensorboard.SummaryWriter()
 
 
-def init_forknet(load, n_classes, device):
-    net = ForkNet(n_classes=n_classes)
+def init_forknet(load, device):
+    net = ForkNet(tissues=MICCAI18.tissues)
     if load:
         net.load_state_dict(torch.load(load, map_location=device))
         logging.info(f'Loaded model from {load}')
@@ -37,87 +33,103 @@ def init_forknet(load, n_classes, device):
     return net
 
 
+def norm_img_tensor(img: torch.Tensor):
+    return (img - img.min()) / torch.max(img)
+
+
+def generate_img_grid(val_batch_dict, net, xslice=20, thresholds=None, transform=None):
+    val_batch_dict = dict(val_batch_dict)
+    sliced_batch_dict = slice_all(val_batch_dict, xslice=xslice)
+    if transform:
+        # just for debugging
+        sliced_batch_dict = transform(sliced_batch_dict)
+    input_slice = sliced_batch_dict.pop('t1w')
+    output_slices_dict = net(input_slice)
+    input_slice = input_slice[0]
+    device = input_slice.device
+    masks = [sliced_batch_dict[tissue][0] for tissue in MICCAI18.tissues]
+    output_slices = [torch.sigmoid(output_slices_dict[tissue][0]) for tissue in MICCAI18.tissues]
+    img_grid = [norm_img_tensor(input_slice)]
+    for target_mask in masks:
+        img_grid.append(target_mask)
+    img_grid.append(torch.zeros((1, 256, 256), device=device))
+    for output_slice in output_slices:
+        img_grid.append(output_slice)
+    if thresholds:
+        img_grid.append(torch.zeros((1, 256, 256), device=device))
+        for i, output_slice in enumerate(output_slices):
+            img_grid.append((output_slice > thresholds[i]).float())
+
+    return img_grid
+
+
+def slice_all(batch_dict, xslice=20):
+    for tensor in batch_dict:
+        batch_dict[tensor] = batch_dict[tensor][xslice].unsqueeze(dim=0)
+
+    return batch_dict
+
+
+def threshold_forknet_output(forknet_output_tensors: torch.Tensor):
+    return tuple(
+        (out >= 0.5).float()
+        for out in forknet_output_tensors
+    )
+
+
 def validate_net(net,
-                 val_loader,
+                 batch_dict,
                  criterion,
-                 tissues,
-                 device,
-                 xslice=20):
+                 thresholds=None):
     with torch.no_grad():
-        threshold = torch.nn.Threshold(0.9, 0)
-        # TODO: export img grid code
-        validation_batch_dict = iter(val_loader).next()
-        augment = Augment(max_degrees=1)
-        validation_batch_dict = augment(validation_batch_dict)
-        for tensor in validation_batch_dict:
-            validation_batch_dict[tensor] = validation_batch_dict[tensor].to(device)
-        validation_input_tensor = validation_batch_dict.pop('t1w')
-        forknet_output_tensors = tuple(torch.sigmoid(o) for o in net(validation_input_tensor))
-        forknet_threshold_output_tensors = tuple(
-            (out >= 0.5).float()
-            for out in forknet_output_tensors
-        )
-        losses = [
-            criterion(
-                forknet_output_tensors[i_tissue],
-                validation_batch_dict[tissue]
-            ) for i_tissue, tissue in enumerate(tissues)
-        ]
-        losses_threshold = [
-            criterion(
-                forknet_threshold_output_tensors[i_tissue],
-                validation_batch_dict[tissue]
-            ) for i_tissue, tissue in enumerate(tissues)
-        ]
+        batch_dict = dict(batch_dict)
+        validation_input_tensor = batch_dict.pop('t1w')
+        validation_output = net(validation_input_tensor)
+        for tissue in validation_output:
+            validation_output[tissue] = torch.sigmoid(validation_output[tissue])
+        tissue_losses = []
+        for i, tissue in enumerate(validation_output):
+            if thresholds:
+                output = (validation_output[tissue] >= thresholds[i]).float()
+            else:
+                output = validation_output[tissue]
+            loss = criterion(
+                output,
+                batch_dict[tissue]
+            )
+            tissue_losses.append(loss)
 
-        # select slice xslice from validation set for visualization
-        input_slice = validation_input_tensor[xslice]
-        slice_target_masks = tuple(validation_batch_dict[tissue][xslice] for tissue in tissues)
-        slice_forknet_outputs = tuple(o[xslice] for o in forknet_output_tensors)
-        slice_threshold_forknet_outputs = tuple(o[xslice] for o in forknet_threshold_output_tensors)
-
-        # build img grid for visualization
-        img_grid = [(input_slice - input_slice.min()) / torch.max(input_slice)]
-        for i_tissue, _ in enumerate(tissues):
-            img_grid.append(slice_target_masks[i_tissue])
-        img_grid.append(torch.zeros((1, 256, 256), device=device))
-        for i_tissue, tissue in enumerate(tissues):
-            img_grid.append(slice_forknet_outputs[i_tissue])
-        img_grid.append(torch.zeros((1, 256, 256), device=device))
-        for i_tissue, tissue in enumerate(tissues):
-            img_grid.append(slice_threshold_forknet_outputs[i_tissue])
-        return losses, img_grid, losses_threshold
+        return tissue_losses, validation_output
 
 
-def tensorboard_write(writer,
-                      global_step,
-                      tissues,
+def tensorboard_write(global_step,
                       losses,
                       val_losses,
-                      val_threshold_losses,
-                      img_grid,
+                      val_batch_dict,
                       net,
-                      device,
-                      write_network_graph=False):
-    for i_tissue, tissue in enumerate(tissues):
+                      write_network_graph=False,
+                      transform=None):
+    # TODO: tidy up
+    for i, tissue in enumerate(MICCAI18.tissues):
         writer.add_scalars(
             f'loss/{tissue}', {
-                'train': losses[i_tissue].item(),
-                'validation': val_losses[i_tissue].item(),
-                'validationThreshold': val_threshold_losses[i_tissue].item()
+                'train': losses[i].item(),
+                'validation': val_losses[i].item()
             },
             global_step=global_step
         )
     writer.add_image(
-        img_tensor=torchvision.utils.make_grid(img_grid, nrow=len(tissues) + 1),
-        tag=f'validation sample {tissues}',
+        img_tensor=torchvision.utils.make_grid(
+            generate_img_grid(val_batch_dict, net, transform=transform),
+            nrow=len(MICCAI18.tissues) + 1
+        ),
+        tag=f'validation sample {MICCAI18.tissues}',
         global_step=global_step
     )
-    if (global_step % 100) == 0:
-        gradients = torch.cat([param.grad.view(-1) for param in net.parameters()])
-        writer.add_histogram(f'Gradients', gradients, global_step=global_step)
+    gradients = torch.cat([param.grad.view(-1) for param in net.parameters()])
+    writer.add_histogram(f'Gradients', gradients, global_step=global_step)
     if write_network_graph and global_step == 0:
-        writer.add_graph(net, torch.zeros((1, 1, 256, 256), device=device))
+        writer.add_graph(net, torch.zeros((1, 1, 256, 256), device=val_batch_dict['t1w'].device))
 
 
 def train_net(batch_size,
@@ -144,11 +156,10 @@ def train_net(batch_size,
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size,
                                                shuffle=True, num_workers=0)
 
-    net = ForkNet(n_classes=2)
+    net = ForkNet(tissues=MICCAI18.tissues)
     optimizer = torch.optim.Adam(
         net.parameters(), lr=lr, betas=betas, eps=eps, weight_decay=l2_penalty, amsgrad=amsgrad
     )
-    writer = torch.utils.tensorboard.SummaryWriter()
     if load:
         state = torch.load(load, map_location=device)
         if state is tuple:
@@ -166,7 +177,7 @@ def train_net(batch_size,
 
     criterion = torch.nn.BCEWithLogitsLoss()
 
-    augment = Augment(max_degrees=1)
+    transform = Transform(mean=train_dataset.mean, std=train_dataset.std)
 
     if not use_raytune:
         logging.info(f'Network:\n'
@@ -183,7 +194,6 @@ def train_net(batch_size,
             ''')
 
     try:
-        global_step = 0
         for epoch in range(epochs):
             if use_raytune:
                 maybe_bar = contextlib.nullcontext()
@@ -191,36 +201,25 @@ def train_net(batch_size,
                 maybe_bar = tqdm(total=len(train_dataset), desc=f'Epoch {epoch + 1}/{epochs}', unit=' slices')
             with maybe_bar as bar:
                 for batch_dict in train_loader:
-                    for mod in batch_dict:
-                        batch_dict[mod] = batch_dict[mod].to(device)
-                    batch_dict = augment(batch_dict)
+                    for tensor in batch_dict:
+                        batch_dict[tensor] = batch_dict[tensor].to(device)
+                    batch_dict = transform(batch_dict)
                     inp = batch_dict.pop('t1w')
                     out = net(inp)
                     losses = [
                         criterion(
-                            out[i_tissue],
+                            out[tissue],
                             batch_dict[tissue]
-                        ) for i_tissue, tissue in enumerate(train_dataset.tissues)
+                        ) for tissue in MICCAI18.tissues
                     ]
                     optimizer.zero_grad()
                     torch.autograd.backward(losses)
                     optimizer.step()
                     bar.update(inp.shape[0]) if not use_raytune else None
-                    val_losses, img_grid, val_threshold_losses = validate_net(
-                        net=net, val_loader=val_loader, criterion=criterion,
-                        device=device, tissues=train_dataset.tissues
-                    )
-                    if not use_raytune:
-                        tensorboard_write(
-                            writer=writer,
-                            global_step=global_step,
-                            tissues=train_dataset.tissues,
-                            losses=losses, val_losses=val_losses,
-                            val_threshold_losses=val_threshold_losses,
-                            img_grid=img_grid, net=net,
-                            device=device, write_network_graph=True,
-                        )
-                    global_step += 1
+            validation_batch_dict = iter(val_loader).next()
+            for tensor in validation_batch_dict:
+                validation_batch_dict[tensor] = validation_batch_dict[tensor].to(device)
+            val_losses, _ = validate_net(net=net, batch_dict=validation_batch_dict, criterion=criterion)
             if use_raytune:
                 with ray.tune.checkpoint_dir(epoch) as checkpoint_dir:
                     path = os.path.join(checkpoint_dir, "checkpoint")
@@ -230,6 +229,12 @@ def train_net(batch_size,
                 if checkpoint and (epoch % checkpoint) == (checkpoint - 1):
                     torch.save(net.state_dict(), 'scheduled_checkpoint.pth')
                     logging.info(f'Saved checkpoint for epoch {epoch + 1}')
+                tensorboard_write(
+                    net=net, global_step=epoch,
+                    losses=losses, val_losses=val_losses,
+                    val_batch_dict=validation_batch_dict,
+                    transform=transform
+                )
     except KeyboardInterrupt:
         torch.save(net.state_dict(), 'interrupt.pth')
         logging.info('Saved interrupt')
@@ -239,125 +244,6 @@ def train_net(batch_size,
         writer.close()
 
 
-def tune_net(config, checkpoint_dir=None, data_dir=None):
-    train_net(config['batch_size'], config['epochs'], config['lr'], [config['beta1'], config['beta2']], config['eps'], config['l2_penalty'],
-              config['amsgrad'], use_raytune=True, load=checkpoint_dir, data_dir=data_dir)
-
-
-@click.group()
-def cli():
-    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
-
-
-@cli.command(help="Tune the hyperparameters", context_settings={'show_default': True})
-@click.option('--max_epochs', default=200, help='number of max training epochs')
-@click.option('--num_samples', default=2, help='number of samples from the hyper-parameter distribution')
-@click.option('--gpus_per_trial', default=1, help='number of gpus per trial')
-@click.option('--cpus_per_trial', default=1, help='number of cpus per trial')
-@click.option('--distribute/--no-distribute', default=False, help='running ray tune in distributed mode')
-def tune(max_epochs, num_samples, gpus_per_trial, cpus_per_trial, distribute):
-    data_dir = os.path.abspath("./data/miccai18/training/")
-    config = {
-        "lr": ray.tune.loguniform(1e-4, 1e-1),
-        "beta1": ray.tune.choice([0.9]),
-        "beta2": ray.tune.choice([0.999]),
-        "eps": ray.tune.choice([1e-8]),
-        "l2_penalty": ray.tune.loguniform(1e-4, 1),
-        "batch_size": ray.tune.choice([20, 30, 60]),
-        "amsgrad": ray.tune.choice([True, False]),
-        "epochs": ray.tune.choice([max_epochs])
-    }
-    scheduler = ASHAScheduler(
-        metric="loss",
-        mode="min",
-        max_t=max_epochs,
-        grace_period=1,
-        reduction_factor=2
-    )
-    reporter = CLIReporter(
-        # parameter_columns=["l1", "l2", "lr", "batch_size"],
-        metric_columns=["loss", "training_iteration"]
-    )
-    if distribute:
-        ray.init(address='auto')
-    result = ray.tune.run(
-        partial(tune_net, data_dir=data_dir),
-        resources_per_trial={"cpu": cpus_per_trial, "gpu": gpus_per_trial},
-        config=config,
-        num_samples=num_samples,
-        scheduler=scheduler,
-        progress_reporter=reporter,
-        local_dir="./ray_results"
-    )
-
-    best_trial = result.get_best_trial("loss", "min", "last")
-    print("Best trial config: {}".format(best_trial.config))
-    print("Best trial final validation loss: {}".format(
-        best_trial.last_result["loss"]))
-
-    best_trained_model = ForkNet(n_classes=2)
+def print_network_and_exit(load):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    if device == 'cuda' and gpus_per_trial > 1:
-        best_trained_model = torch.nn.DataParallel(best_trained_model)
-    best_trained_model.to(device)
-
-    best_checkpoint_dir = best_trial.checkpoint.value
-    model_state, optimizer_state = torch.load(os.path.join(
-        best_checkpoint_dir, "checkpoint"))
-    best_trained_model.load_state_dict(model_state)
-
-
-@cli.command(help="Train the network")
-@click.option('-b', '--batch_size', default=20, help='number of slices in batch')
-@click.option('--epochs', default=100, help='number of training epochs')
-@click.option('-l', '--lr', default=1e-3, help='learning rate')
-@click.option('--eps', default=1e-8, help='adam epsilon value')
-@click.option('--betas', default=(0.9, 0.999), help='adam beta values')
-@click.option('--l2_penalty', default=0., help='adam weight decay (L2 penalty)')
-@click.option('--amsgrad/--no-amsgrad', default=False, help='use amsgrad version of adam from the '
-                                                            'paper `On the Convergence of Adam and Beyond`')
-@click.option('--load', default=None, type=str,
-              help='path to state dict file')
-@click.option('--checkpoint', default=None, type=int,
-              help='save network state dict every N epochs')
-def train(batch_size,
-          epochs,
-          lr,
-          betas,
-          eps,
-          l2_penalty,
-          amsgrad,
-          load,
-          checkpoint):
-    train_net(batch_size, epochs, lr, betas, eps, l2_penalty, amsgrad, load, checkpoint)
-
-
-@cli.command(help="Allocate network and print network information")
-@click.option('--load', default=None, type=str,
-              help='path to state dict file')
-@click.option('--n_classes', default=2, type=int,
-              help='path to state dict file')
-@click.option('--force_cpu', default=False,
-              help="always use cpu, even if cuda available")
-def dry_run(load, n_classes, force_cpu):
-    device = torch.device('cuda' if torch.cuda.is_available() and force_cpu is False else 'cpu')
-    print(init_forknet(load, n_classes, device))
-
-
-@cli.command(help="Test a trained network on the test data.")
-@click.argument('load', type=str)
-@click.option('--n_classes', default=2, type=int,
-              help='path to state dict file')
-@click.option('--force_cpu', default=False,
-              help="always use cpu, even if cuda available")
-@click.option('--xslice', default=30, help="choose axial slice")
-def test_net(load, n_classes, force_cpu, xslice):
-    test_case = ['1']
-    device = torch.device('cuda' if torch.cuda.is_available() and force_cpu is False else 'cpu')
-    dataset = MICCAI18(base_dir='data/miccai18/training', case_list=test_case)
-    net = init_forknet(load=load, n_classes=n_classes, device=device)
-    criterion = torch.nn.BCEWithLogitsLoss()
-    test_loader = torch.utils.data.DataLoader(dataset, batch_size=len(dataset), shuffle=False, num_workers=0)
-    _, img_grid, _ = validate_net(net=net, val_loader=test_loader, criterion=criterion,
-                               tissues=dataset.tissues, device=device, xslice=xslice)
-    plot_matrix(torchvision.utils.make_grid(img_grid, nrow=len(dataset.tissues) + 1).cpu().numpy()[0])
+    print(init_forknet(load, device))
