@@ -1,14 +1,13 @@
 import torch
 import matplotlib.pyplot as plt
-from skimage.transform import resize
-from torchvision.utils import make_grid
 import numpy as np
 
 from forknet.utils.helper import overlay
 
 
 def load_volume(file: str):
-    return torch.load(file).squeeze().detach().cpu()
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    return torch.load(file, map_location=device).squeeze().detach().cpu()
 
 
 def dice(pred, gt, smooth=1e-5):

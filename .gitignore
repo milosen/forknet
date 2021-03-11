@@ -130,7 +130,6 @@ dmypy.json
 
 # training data
 data/
-case01015/
 
 # tensorboard data
 test/runs/
