@@ -142,6 +142,7 @@ ray_results
 # state dict
 interrupt.pth
 scheduled_checkpoint.pth
+checkpoints/
 
 # misc
 *.swp

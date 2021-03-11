@@ -3,6 +3,7 @@ import click
 from forknet.train import train_net, print_network_and_exit
 from forknet.tune import tune_net
 from forknet.eval import test_net
+from forknet.utils.viz import show_features
 
 
 @click.group()
@@ -16,8 +17,10 @@ def cli():
 @click.option('--gpus_per_trial', default=1, help='number of gpus per trial')
 @click.option('--cpus_per_trial', default=1, help='number of cpus per trial')
 @click.option('--distribute/--no-distribute', default=False, help='running ray tune in distributed mode')
-def tune(max_epochs, num_samples, gpus_per_trial, cpus_per_trial, distribute):
-    tune_net(max_epochs, num_samples, gpus_per_trial, cpus_per_trial, distribute)
+@click.option('--slice_dir', default=2, type=int,
+              help='slicing direction for data samples ({0, 1, 2} = {x, y, z})')
+def tune(max_epochs, num_samples, gpus_per_trial, cpus_per_trial, distribute, slice_dir):
+    tune_net(max_epochs, num_samples, gpus_per_trial, cpus_per_trial, distribute, slice_dir)
 
 
 @cli.command(help="Train the network")
@@ -33,8 +36,11 @@ def tune(max_epochs, num_samples, gpus_per_trial, cpus_per_trial, distribute):
               help='path to state dict file')
 @click.option('--checkpoint', default=None, type=int,
               help='save network state dict every N epochs')
-def train(batch_size, epochs, lr, betas, eps, l2_penalty, amsgrad, load, checkpoint):
-    train_net(batch_size, epochs, lr, betas, eps, l2_penalty, amsgrad, load, checkpoint)
+@click.option('--slice_dir', default=2, type=int,
+              help='slicing direction for data samples ({0, 1, 2} = {x, y, z})')
+def train(batch_size, epochs, lr, betas, eps, l2_penalty, amsgrad, load, checkpoint, slice_dir):
+    train_net(batch_size, epochs, lr, betas, eps, l2_penalty, amsgrad,
+              load=load, checkpoint=checkpoint, slice_dir=slice_dir)
 
 
 @cli.command(help="Allocate network and print network information")
@@ -47,6 +53,15 @@ def dry_run(load):
 @cli.command(help="Test a trained network on the test data.")
 @click.argument('load', type=str)
 @click.option('--xslice', default=20, help="choose axial slice")
-@click.option('--show/--no-show', default=30, help="show plots")
-def test(load, xslice, show):
-    test_net(load, xslice, show)
+@click.option('--testset/--no-test', default=False, help="use testset")
+@click.option('--slice_axis', default=2, help="slicing direction (0: saggital, 1: coronal und 2: axial)")
+def test(load, xslice, testset, slice_axis):
+    test_net(load, xslice, testset, slice_axis)
+
+
+@cli.command(help="Test a trained network on the test data.")
+@click.argument('load', type=str)
+@click.option('--encoder', default=0, help="encoder idx to visualize")
+@click.option('--xslice', default=20, help="choose axial slice")
+def viz_features(load, encoder, xslice):
+    show_features(load, encoder, xslice)

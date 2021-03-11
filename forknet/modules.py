@@ -1,4 +1,4 @@
-""" Parts of the U-Net model """
+""" Parts of the ForkNet model """
 
 import torch
 import torch.nn as nn
@@ -38,7 +38,7 @@ class DecodeModule(nn.Module):
         super().__init__()
 
         self.decode = nn.Sequential(
-            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2, padding=0),
+            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2),
             nn.BatchNorm2d(out_channels, eps=0.001, momentum=0.9),
             nn.ReLU(),
             ConvModule(out_channels, out_channels)

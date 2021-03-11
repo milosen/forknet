@@ -8,8 +8,8 @@ import numpy as np
 import pandas as pd
 
 from forknet.datasets.miccai18 import MICCAI18
-from forknet.train import init_forknet, validate_net, generate_img_grid, slice_all
-from forknet.utils.helper import plot_matrix
+from forknet.train import init_forknet, validate_net, generate_img_grid
+from forknet.utils.helper import plot_matrix, softmax_rule
 
 
 def plot_roc_curve(pred: torch.Tensor, label: torch.Tensor, name="example estimator"):
@@ -30,43 +30,27 @@ def plot_roc_curve(pred: torch.Tensor, label: torch.Tensor, name="example estima
     return list(roc_t['threshold'])[0]
 
 
-def test_net(load, xslice, show, test=False):
+def test_net(load, xslice=20, test=False, slice_axis=2):
     if test:
         test_case = ['1']  # test case
     else:
         test_case = ['4']  # validation case
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    dataset = MICCAI18(base_dir='data/miccai18/training', case_list=test_case)
+    dataset = MICCAI18(base_dir='data/miccai18/training', case_list=test_case, slice_axis=slice_axis)
     net = init_forknet(load=load, device=device)
-    criterion = torch.nn.BCEWithLogitsLoss()
+    criterion = torch.nn.CrossEntropyLoss()
     test_loader = torch.utils.data.DataLoader(dataset, batch_size=len(dataset), shuffle=False, num_workers=0)
     test_batch_dict = iter(test_loader).next()
     for tissue in test_batch_dict:
         test_batch_dict[tissue] = test_batch_dict[tissue].to(device)
-    losses, outputs = validate_net(net=net, batch_dict=test_batch_dict, criterion=criterion)
-    logging.info(f"Losses: {losses}")
-    if show:
-        plot_matrix(
-            torchvision.utils.make_grid(
-                generate_img_grid(test_batch_dict, net, xslice),
-                nrow=len(dataset.tissues) + 1
-            ).detach().cpu().numpy()[0]
-        )
-        thresholds = []
-        for tissue in MICCAI18.tissues:
-            best_threshold = plot_roc_curve(
-                name=f"ROC curve for {tissue} tissue",
-                label=test_batch_dict[tissue],
-                pred=outputs[tissue]
-            )
-            logging.info(f"Best threshold: {best_threshold}")
-            thresholds.append(best_threshold)
-        t_losses, t_outputs = validate_net(net=net, batch_dict=test_batch_dict, criterion=criterion,
-                                           thresholds=thresholds)
-        logging.info(f"Losses with threshold: {t_losses}")
-        plot_matrix(
-            torchvision.utils.make_grid(
-                generate_img_grid(test_batch_dict, net, xslice, thresholds),
-                nrow=len(dataset.tissues) + 1
-            ).detach().cpu().numpy()[0]
-        )
+    loss, outputs = validate_net(net=net, batch_dict=test_batch_dict, criterion=criterion)
+    logging.info(f"Loss: {loss}")
+    plot_matrix(
+        torchvision.utils.make_grid(
+            generate_img_grid(test_batch_dict, net, xslice, slice_dir=slice_axis),
+            nrow=len(dataset.tissues) + 1
+        ).detach().cpu().numpy()[0]
+    )
+    outputs = torch.cat([outputs[tissue] for tissue in MICCAI18.tissues], dim=1)
+    targets = torch.argmax(torch.cat([test_batch_dict[tissue] for tissue in MICCAI18.tissues], dim=1), 1)
+    logging.info(f"Loss thresholded: {criterion(outputs, targets)}")

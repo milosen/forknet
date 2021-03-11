@@ -49,6 +49,6 @@ class ForkNet(torch.nn.Module):
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         encoder_outputs = self.encoder_track(x)
         return {
-            tissue: decoder_track(list(encoder_outputs))
-            for tissue, decoder_track in zip(self.tissues, self.decoder_tracks)
+                tissue: decoder_track(list(encoder_outputs))
+                for tissue, decoder_track in zip(self.tissues, self.decoder_tracks)
         }

@@ -4,7 +4,7 @@ import kornia.augmentation as k
 
 class Transform(torch.nn.Module):
 
-    def __init__(self, mean, std, scale=(0.9, 1.1), max_degrees=2) -> None:
+    def __init__(self, mean, std, scale=(0.9, 1.1), max_degrees=0) -> None:
         super(Transform, self).__init__()
         self.max_degrees = max_degrees
         self.aff = k.RandomAffine(max_degrees, resample=k.Resample.NEAREST, scale=scale)
