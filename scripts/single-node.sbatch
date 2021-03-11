@@ -10,7 +10,7 @@
 #
 #SBATCH --partition="gpu"
 #SBATCH --constraint="gpu"
-#SBATCH --gres=gpu:v100:2         # If using both GPUs of a node
+#SBATCH --gres=gpu:rtx5000:1
 #SBATCH --mem=92500
 #
 #SBATCH --nodes=1
@@ -22,7 +22,7 @@
 #
 #SBATCH --time=24:00:00
 module purge
-module load miniconda cuda
+module load miniconda
 
 source activate forknet
 
